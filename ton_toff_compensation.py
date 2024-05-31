@@ -1,9 +1,7 @@
-### VSR Kompensation
+### ton, toff Kompensation
 
-### This code does show the Compensation in alpha ventus grid with the VSR as a single compensating element
-### Here, there is one value for P on busbar 5 that is definded in advance
-
-
+### This code does show the Compensation in alpha ventus grid with onshore and offshore transformer as compensating element
+### VSR is deactivated. Here, there is one value for P on busbar 5 that is definded in advance
 
 # import
 import matplotlib
@@ -16,9 +14,10 @@ from pyomo.environ import *
 import matplotlib.pyplot as plt
 from pyomo.environ import cos, sin
 from pyomo.environ import SolverFactory
-solver = SolverFactory('ipopt', executable='C:\\Users\\User\\AppData\\Local\\Ipopt-3.11.1-win64-intel13.1\\bin\\ipopt.exe')
+solver = SolverFactory('ipopt', executable='C:\\Users\\yasin\\AppData\\Local\\Ipopt-3.11.1-win64-intel13.1\\bin\\ipopt.exe')
 
-
+# access to file share where ipopt is located
+from matplotlib.ticker import (MultipleLocator, FormatStrFormatter, AutoMinorLocator) 
 
 results_list = []
 
@@ -34,8 +33,10 @@ model.P[4].setlb(None)
 model.P[4].setub(None) 
 model.Q = Var(range(n), within = Reals, bounds =(-1,1))
 
-# operational range of VSR (10 steps)
-model.k = Var(bounds = (0, 1))
+# operational range of transformer (10 steps, Integers)
+model.ton = Var(bounds = (0, 10), within = Integers)
+model.toff = Var(bounds = (0, 10), within = Integers)
+
 # auxiliary variable for initializing permissible offset
 model.deltaV = Var()
 
@@ -43,12 +44,7 @@ model.deltaV = Var()
 model.permissible_offset_plus = Var(within=Reals, bounds=(0, 0.5))
 model.permissible_offset_minus = Var(within=Reals, bounds=(0, 0.5))
 
-# P5 = infeed busbar
-model.P[4].fix(1) ## adjust x in fix(x) in order to observe optmization behaviour
-
-# VSR is only switching equipment: Onshore and Offshore Transformer are set as constant
-ton = 0
-toff = 1
+model.P[4].fix(0.5) ## adjust x in fix(x) in order to observe optmization behaviour
 
 # constants
 VINF = 220e3
@@ -64,10 +60,13 @@ SB = 100e6
 ZB = VB**2 / SB
 YB = 1 / ZB
 
-
 # Infitine Bus
-Skpp = 2000e6   #strong grid equivalent
-#Skpp = 400e6   #weak grid equivalent
+Skpp = 2000e6 #strong grid equivalent
+#Skpp = 400e6 #weak grid equivalent
+
+# further stressing the boundaries of Vpcc
+model.V[1].setlb(1.01)  # upper boundary for pcc voltage
+model.V[1].setub(1.1)   # lower boundary for pcc voltage
 
 # SI
 Xinf = VINF**2 / Skpp
@@ -87,7 +86,8 @@ ztrf_on = 1j * xtrf_on
 # PI circuit
 ytrf_on = 1 / ztrf_on
 dv_on = 1.25 / 100
-theta_on = (1 + ton*dv_on)
+#theta_on = (1 + ton*dv_on)
+theta_on = (1 + model.ton*dv_on)
 
 # Offshore Transformer
 xtrf_off_pu = 0.13
@@ -98,15 +98,18 @@ ztrf_off = 1j * xtrf_off
 # PI circuit
 ytrf_off = 1 / ztrf_off
 dv_off = 1.25 / 100
-theta_off = (1 + toff*dv_off)
+#theta_off = (1 + toff*dv_off)
+theta_off = (1+model.toff*dv_off)
 
 # VSR
 Qvsr = 35e6
 
+# control
+scale = 0.1 #VSR set as fixed Shunt 
+
 # SI
 bvsr = (Qvsr/SB) * (VB/VON)
-#yvsr = (-1) * 1j * scale*bvsr
-yvsr = (-1) * model.k*bvsr
+yvsr = (-1) * 1j * scale*bvsr
 
 # FSR
 Qfsr = 35e6
@@ -136,13 +139,8 @@ zcable = rcable + 1j * xcable
 ycable = 0.5 * 1j * bcable
 zcable, ycable
 
-# model.Q[4].fix(0) #optional 
-
-model.delta[0].fix(0)
-
-# further stressing the boundaries of Vpcc
-model.V[1].setlb(1.01)  # upper boundary for pcc voltage
-model.V[1].setub(1.1)   # lower boundary for pcc voltage
+model.V[1].setlb(1.01)  # Untere Grenze für die PCC-Spannung
+model.V[1].setub(1.1)   # Obere Grenze für die PCC-Spannung
 
 b01 = b10 = xinf/(xinf**2+rinf**2)
 ytrf_on = 1/ xtrf_on
@@ -249,15 +247,12 @@ model.reactive_power_constraint_5 = Constraint(expr=
     model.V[4] * model.V[4] * (g44 * sin(model.delta[4] - model.delta[4]) - b44 * cos(model.delta[4] - model.delta[4])) == model.Q[4]
 )
 
-# formulate objective function as function in dependency of 1.05 and permissible offset
 model.abs_constraint1 = Constraint(expr=model.deltaV <= model.V[1] - 1.05 + model.permissible_offset_plus - model.permissible_offset_minus)
 model.abs_constraint2 = Constraint(expr=model.deltaV >= -(model.V[1] - 1.05 + model.permissible_offset_plus - model.permissible_offset_minus))
 
-# expr=1 => find operation point that satisfies permissible offset
 model.objective = Objective(expr=1)
 
-# access fileshare wheree ipopt is located 
-solver = SolverFactory('ipopt', executable='C:\\Users\\User\\AppData\\Local\\Ipopt-3.11.1-win64-intel13.1\\bin\\ipopt.exe')
+solver = SolverFactory('ipopt', executable='C:\\Users\\yasin\\AppData\\Local\\Ipopt-3.11.1-win64-intel13.1\\bin\\ipopt.exe')
 solver.solve(model)
 
 P_values = [model.P[i].value for i in range(5)]
@@ -277,8 +272,9 @@ results_df = pd.DataFrame({
 # Displaying the DataFrame
 print(results_df)
 
-# Displaying model.k.value separately
-print("Model k value:", model.k.value)
 
-# shall not be "within reals" but rounded to 0.i
-print("Model k rounded:", round(model.k.value,1))    
+# Displaying results of every equipment -> rounded to Integer (OLTC)
+print("Model ton value:", model.ton.value)
+print("Model ton rounded:", round(model.ton.value,0))  
+print("Model toff value:", model.toff.value)
+print("Model toff rounded:", round(model.toff.value,0))
